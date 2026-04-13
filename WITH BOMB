@@ -24,6 +24,7 @@ class Figure:
         [[1, 2, 6, 10], [5, 6, 7, 9], [2, 6, 10, 11], [3, 5, 6, 7]],
         [[1, 4, 5, 6], [1, 4, 5, 9], [4, 5, 6, 9], [1, 5, 6, 9]],   
         [[1, 2, 5, 6]],
+        [[5]],  # Bomb: single cube
     ]
 
     def __init__(self, x, y):
@@ -32,6 +33,7 @@ class Figure:
         self.type = random.randint(0, len(self.figures) - 1)
         self.color = random.randint(1, len(colors) - 1)
         self.rotation = 0
+        self.is_bomb = False
 
     def image(self):
         return self.figures[self.type][self.rotation]
@@ -65,7 +67,14 @@ class Tetris:
             self.field.append(new_line)
 
     def new_figure(self):
-        self.figure = Figure(3, 0)
+        # 33% chance to spawn a bomb piece
+        if random.randint(1, 100) <= 33:
+            self.figure = Figure(3, 0)
+            self.figure.is_bomb = True
+            self.figure.type = 7  # Bomb type (single cube)
+            self.figure.color = 0  # Black color for bombs
+        else:
+            self.figure = Figure(3, 0)
 
     def intersects(self):
         intersection = False
@@ -75,7 +84,7 @@ class Tetris:
                     if i + self.figure.y > self.height - 1 or \
                             j + self.figure.x > self.width - 1 or \
                             j + self.figure.x < 0 or \
-                            self.field[i + self.figure.y][j + self.figure.x] > 0:
+                            (i + self.figure.y >= 0 and self.field[i + self.figure.y][j + self.figure.x] > 0):
                         intersection = True
         return intersection
 
@@ -106,10 +115,19 @@ class Tetris:
             self.freeze()
 
     def freeze(self):
-        for i in range(4):
-            for j in range(4):
-                if i * 4 + j in self.figure.image():
-                    self.field[i + self.figure.y][j + self.figure.x] = self.figure.color
+        # Handle bomb explosion
+        if self.figure.is_bomb:
+            # Calculate bomb center position
+            bomb_center_x = self.figure.x + 1
+            bomb_center_y = self.figure.y + 1
+            # Clear 3x3 area around bomb
+            self.clear_3x3(bomb_center_x, bomb_center_y)
+        else:
+            # Normal freeze for regular pieces
+            for i in range(4):
+                for j in range(4):
+                    if i * 4 + j in self.figure.image():
+                        self.field[i + self.figure.y][j + self.figure.x] = self.figure.color
         self.break_lines()
         self.new_figure()
         if self.intersects():
@@ -122,10 +140,37 @@ class Tetris:
             self.figure.x = old_x
 
     def rotate(self):
+        # Bombs cannot be rotated
+        if self.figure.is_bomb:
+            return
         old_rotation = self.figure.rotation
         self.figure.rotate()
         if self.intersects():
             self.figure.rotation = old_rotation
+
+    def clear_3x3(self, center_x, center_y):
+        """Clear a 3x3 area centered around the given position"""
+        for i in range(-1, 2):
+            for j in range(-1, 2):
+                field_x = center_x + j
+                field_y = center_y + i
+                if 0 <= field_x < self.width and 0 <= field_y < self.height:
+                    self.field[field_y][field_x] = 0
+        self.score += 200  # Award points for bomb explosion
+
+    def bomb(self, x, y):
+        """Clear a 2x2 area at the given position (x, y)"""
+        if self.bombs <= 0:
+            return False
+        for i in range(2):
+            for j in range(2):
+                field_x = x + j
+                field_y = y + i
+                if 0 <= field_x < self.width and 0 <= field_y < self.height:
+                    self.field[field_y][field_x] = 0
+        self.bombs -= 1
+        self.score += 100  # Award points for clearing with bomb
+        return True
 
 
 # Initialize the game engine
