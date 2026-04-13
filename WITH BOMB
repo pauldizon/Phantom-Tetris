@@ -5,10 +5,10 @@ colors = [
     (0, 0, 0),
     (120, 37, 179),
     (100, 179, 179),
-    (80, 34, 22),
     (80, 134, 22),
     (180, 34, 22),
     (180, 34, 122),
+    (255, 255, 0),  # Yellow for bombs
 ]
 
 
@@ -31,7 +31,7 @@ class Figure:
         self.x = x
         self.y = y
         self.type = random.randint(0, len(self.figures) - 1)
-        self.color = random.randint(1, len(colors) - 1)
+        self.color = random.randint(1, len(colors) - 2)  # Exclude yellow (reserved for bombs)
         self.rotation = 0
         self.is_bomb = False
 
@@ -67,12 +67,12 @@ class Tetris:
             self.field.append(new_line)
 
     def new_figure(self):
-        # 33% chance to spawn a bomb piece
+        # 5% chance to spawn a bomb piece
         if random.randint(1, 100) <= 33:
             self.figure = Figure(3, 0)
             self.figure.is_bomb = True
             self.figure.type = 7  # Bomb type (single cube)
-            self.figure.color = 0  # Black color for bombs
+            self.figure.color = 6  # Yellow color for bombs
         else:
             self.figure = Figure(3, 0)
 
@@ -184,7 +184,7 @@ GRAY = (128, 128, 128)
 size = (400, 500)
 screen = pygame.display.set_mode(size)
 
-pygame.display.set_caption("Tetris")
+pygame.display.set_caption("Phantom Tetris by Team LEAP @BSCPE-1A 2026")
 
 # Loop until the user clicks the close button.
 done = False
@@ -227,7 +227,7 @@ while not done:
             if event.key == pygame.K_DOWN:
                 pressing_down = False
 
-    screen.fill(WHITE)
+    screen.fill(BLACK)
 
     for i in range(game.height):
         for j in range(game.width):
