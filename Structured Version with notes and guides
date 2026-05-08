@@ -1,0 +1,647 @@
+import pygame # Import modules 
+import pygame # game graphics and sound
+import random # generating random numbers
+import json #saving/loading scores
+import os  #file paths
+import math #sound generation
+import logging #debug and error messages
+from abc import ABC, abstractmethod #abc for abstract classes
+from enum import Enum #game states so we don't overload 
+
+# =============================================================================
+# LOGGING
+# =============================================================================
+logging.basicConfig(level=logging.INFO, format='%(levelname)s: %(message)s') 
+# Pinapakita info level messages with a simple format,auto-indicator what's happening if something goes wrong.
+
+# =============================================================================
+# GAME STATE ENUM
+# =============================================================================
+class GameState(Enum):
+# Define the different game states the para alam screen what to show.
+    START = 1
+    PLAYING = 2
+    HOW_TO_PLAY = 3
+    SCOREBOARD = 4
+    ENTER_NAME = 5
+    GAMEOVER = 6
+
+# =============================================================================
+# COLORS
+# =============================================================================
+colors = [ # List of colors used for the game pieces and background. Index 0 is black (empty), 1-6 are for pieces, 7 is yellow for bombs. RGB
+    (0, 0, 0),
+    (120, 37, 179),
+    (100, 179, 179),
+    (80, 134, 22),
+    (180, 34, 22),
+    (180, 34, 122),
+    (255, 255, 0),  
+]
+
+# =============================================================================
+# CUSTOM EXCEPTIONS
+# =============================================================================
+
+# Custom exceptions for game errors, like loading assets or handling scores. HAIL MARYS
+class GameError(Exception):
+    pass
+
+class AssetLoadError(GameError):
+    pass
+
+class ScoreboardError(GameError):
+    pass
+
+# =============================================================================
+# ABSTRACT PIECE BASE CLASS
+# =============================================================================
+# Abstract base class for all game pieces. It defines common attributes and methods that all pieces must have, like position and abstract methods for image, placing, and rotating.
+class AbstractPiece(ABC):
+    def __init__(self, x, y):
+    # Initializes the Tetris game instance with the given height and width, setting up the game state, field, and audio manager.
+        self.x = x
+        self.y = y
+        self.rotation = 0
+
+    @abstractmethod  # Must return the shape of the piece as a list of indices
+    def image(self):
+        pass
+
+    @abstractmethod # Must place the piece on the game field
+    def place(self, game):
+        pass
+
+    @abstractmethod # Must change the rotation of the piece
+    def rotate(self):
+        pass
+
+# =============================================================================
+# FIGURE (Standard Tetromino) 
+# =============================================================================
+# Class for standard Tetris pieces (tetrominoes). It inherits from AbstractPiece and defines shapes, colors, and behaviors for regular pieces.
+
+class Figure(AbstractPiece):
+    figures = [ # List of shapes for each piece type, with different rotations. Each is a list of indices in a 4x4 grid
+        [[1, 5, 9, 13], [4, 5, 6, 7]], # I-piece
+        [[4, 5, 9, 10], [2, 6, 5, 9]], # O-piece
+        [[6, 7, 9, 10], [1, 5, 6, 10]], # S-piece
+        [[1, 2, 5, 9], [0, 4, 5, 6], [1, 5, 9, 8], [4, 5, 6, 10]], # T-piece
+        [[1, 2, 6, 10], [5, 6, 7, 9], [2, 6, 10, 11], [3, 5, 6, 7]], # J-piece
+        [[1, 4, 5, 6], [1, 4, 5, 9], [4, 5, 6, 9], [1, 5, 6, 9]], # L-piece
+        [[1, 2, 5, 6]],  # Square piece
+        [[5]],  # Bomb: single cube
+    ]
+
+    def __init__(self, x, y):
+        super().__init__(x, y) 
+        self.type = random.randint(0, len(self.figures) - 2)  # Hanap or RNG the pieces but Exclude bomb type
+        self.color = random.randint(1, len(colors) - 2) # Randomly choose a color for the piece
+        self.is_bomb = False # No Kamikaze
+
+    def image(self): # Return the current shape based on type and rotation
+        return self.figures[self.type][self.rotation]
+
+    def place(self, game: 'Tetris') -> None: # Place the piece on the game field by setting the color in the field grid
+        for i in range(4): # 4 rows in 4x4 grid
+            for j in range(4): # 4 columns
+                if i * 4 + j in self.image(): # If this position is part of the piece
+                    game.field[i + self.y][j + self.x] = self.color # Set the field color
+
+    def rotate(self) -> None: # Rotate the piece to the next rotation state
+        self.rotation = (self.rotation + 1) % len(self.figures[self.type])
+
+# =============================================================================
+# BOMB FIGURE
+# =============================================================================
+# Main attraction. It inherits from Figure but overrides placement and rotation.
+
+class BombFigure(Figure): 
+    def __init__(self, x, y):
+        super().__init__(x, y)
+        self.is_bomb = True  # Mark as bomb
+        self.type = 7 # Says the Bomb type
+        self.color = 6 # Yellow color
+
+# Place the bomb: clear a 3x3 area around the center and play sound
+    def place(self, game: 'Tetris') -> None:
+         # Calculate center of the bomb (middle of 4x4 grid)
+        bomb_center_x = self.x + 1
+        bomb_center_y = self.y + 1
+        game.clear_3x3(bomb_center_x, bomb_center_y) # Clear the area
+        game.audio.play_bomb() #Rest in peace my granny she got hit by a bazooka
+
+    def rotate(self) -> None:
+        # Bombs do not rotate
+        return
+
+
+# =============================================================================
+# AUDIO MANAGER
+# =============================================================================
+# Class to handle game sounds, like line clear and bomb explosion.
+
+class AudioManager:
+    def __init__(self):
+        self.line_clear_sound = None # Sound for clearing lines
+        self.bomb_sound = None # Sound for bomb
+
+    # Play line clear sound if available
+    def play_line_clear(self) -> None:
+        if self.line_clear_sound:
+            try:
+                self.line_clear_sound.play()
+            except pygame.error:
+                pass
+
+    # Play bomb sound if available
+    def play_bomb(self) -> None:
+        if self.bomb_sound:
+            try:
+                self.bomb_sound.play()
+            except pygame.error:
+                pass
+
+# =============================================================================
+# TETRIS GAME CLASS
+# =============================================================================
+# Main class for the Tetris game logic. It manages the field, pieces, score, state, and all game actions.
+
+class Tetris:
+    # Initialize the game with field dimensions, set default values for level, score, state, positions, etc.
+    def __init__(self, height: int, width: int):
+        self.level = 2 # Starting level
+        self._score = 0 # Private score variable
+        self.state = GameState.START # Initial game state is START
+        self.height = height # Field height in blocks
+        self.width = width # Field width in blocks
+        self.x = 100 # X position of the game field on the screen
+        self.y = 60 # Y position of the game field on the screen
+        self.zoom = 20 # Size of each block
+        self.figure = None # Current active piece
+        self.columns_hidden = False # Flag to indicate if outer columns are disabled
+        self.disabled_columns: set = set() # Set of column indices that are currently disabled
+        self.field = self.create_empty_field(height, width) # # 2D list for the game field
+        self.audio = AudioManager() #DJ
+
+    # --- Score encapsulation ---
+    @property  # Property to get the score safely
+    def score(self) -> int:
+        return self._score
+
+    @score.setter # Setter to set score, ensuring it's not negative
+    def score(self, value: int) -> None:
+        if value >= 0:
+            self._score = value
+        else:
+            logging.warning("Attempted to set a negative score: %d", value)
+
+    # Create an empty field as a list of lists filled with 0s
+    def create_empty_field(self, height: int, width: int) -> list:
+        return [[0 for _ in range(width)] for _ in range(height)]
+
+    # Create a new random piece, with higher bomb chance if columns are hidden
+    def new_figure(self) -> None:
+        bomb_chance = 45 if self.columns_hidden else 20 # Higher chance when hard
+        if random.randint(1, 100) <= bomb_chance:
+            self.figure = BombFigure(3, 0) # Bomb at position 3,0
+        else:
+            self.figure = Figure(3, 0) # Regular piece at position 3,0
+        self.update_column_visibility()  # Update visibility after spawning
+
+    def intersects(self) -> bool:    # Check if the current piece intersects with boundaries, blocks, or disabled columns
+        intersection = False
+        for i in range(4): # Check each cell in 4x4 piece grid
+            for j in range(4):
+                if i * 4 + j in self.figure.image():
+                    field_x = j + self.figure.x
+                    field_y = i + self.figure.y
+                    # Disabled column collision
+                    if field_x in self.disabled_columns:
+                        intersection = True
+                    elif (
+                        field_y > self.height - 1
+                        or field_x > self.width - 1
+                        or field_x < 0
+                        or (field_y >= 0 and self.field[field_y][field_x] > 0)
+                    ):
+                        intersection = True
+        return intersection
+
+   # Clear full lines, shift rows down, add score, play sound, update visibility
+    def break_lines(self) -> None:
+        lines = 0  # Count of lines cleared
+        for i in range(1, self.height):  # Start from row 1 (top is 0)
+            zeros = sum(1 for j in range(self.width) if self.field[i][j] == 0)  # Count empty cells
+            if zeros == 0:  # Full line
+                lines += 1
+                for i1 in range(i, 1, -1):  # Shift rows down
+                    for j in range(self.width):
+                        self.field[i1][j] = self.field[i1 - 1][j]
+        if lines > 0:
+            self.audio.play_line_clear()  # Play sound
+        if lines > 0:
+            self.score += lines ** 2  # Add score (squared for bonus)
+        self.update_column_visibility()  # Update after clearing
+
+    # Drop the piece instantly to the bottom
+    def go_space(self) -> None:
+        while not self.intersects():  # Move down until it hits
+            self.figure.y += 1
+        self.figure.y -= 1  # Undo last move
+        self.freeze()  # Place it
+
+    # Move piece down one step, freeze if it hits
+    def go_down(self) -> None:
+        self.figure.y += 1
+        if self.intersects():
+            self.figure.y -= 1  # Undo
+            self.freeze()  # Place
+        else:
+            self.update_column_visibility()  # Update visibility
+
+    # Move piece left/right by dx, undo if invalid
+    def go_side(self, dx: int) -> None:
+        old_x = self.figure.x
+        self.figure.x += dx
+        if self.intersects():
+            self.figure.x = old_x  # Undo
+        else:
+            self.update_column_visibility()
+
+    # Rotate piece, undo if invalid
+    def rotate(self) -> None:
+        old_rotation = self.figure.rotation
+        self.figure.rotate()
+        if self.intersects():
+            self.figure.rotation = old_rotation  # Undo
+        else:
+            self.update_column_visibility()
+
+    # Check if row 14 (15th row) has any blocks
+    def fifteenth_row_blocked(self) -> bool:
+        return any(self.field[14][col] > 0 for col in range(self.width))
+
+    # Hide/show outer columns based on row 14
+    def update_column_visibility(self) -> None:
+        if self.fifteenth_row_blocked():
+            self.disabled_columns = {0, self.width - 1}  # Disable left and right
+            self.columns_hidden = True
+        else:
+            self.disabled_columns = set()  # Enable all
+            self.columns_hidden = False
+
+    # Place piece, clear lines, update, spawn new, check game over
+    def freeze(self) -> None:
+        self.figure.place(self)  # Place on field
+        self.break_lines()  # Clear lines
+        self.update_column_visibility()  # Update columns
+        self.new_figure()  # New piece
+        if self.intersects():  # If new piece hits, game over
+            self.state = GameState.ENTER_NAME
+
+    # Clear 3x3 area around center for bomb
+    def clear_3x3(self, center_x: int, center_y: int) -> None:
+        for i in range(-1, 2):  # -1,0,1
+            for j in range(-1, 2):
+                field_x = center_x + j
+                field_y = center_y + i
+                if 0 <= field_x < self.width and 0 <= field_y < self.height:  # Within bounds
+                    self.field[field_y][field_x] = 0  # Clear
+        self.score += 25  # Bonus points
+
+    # Load high scores from JSON file
+    def load_high_scores(self) -> list:
+        scoreboard_file = os.path.join(os.path.dirname(__file__), "scoreboard.json")
+        if not os.path.exists(scoreboard_file):
+            return []  # No file, return empty
+        try:
+            with open(scoreboard_file, 'r', encoding='utf-8') as f:
+                return json.load(f)  # Load list
+        except (IOError, json.JSONDecodeError) as exc:
+            logging.error("High score load failed: %s", exc)
+            return []
+
+    # Save high scores to JSON file
+    def save_high_scores(self, scores: list) -> None:
+        scoreboard_file = os.path.join(os.path.dirname(__file__), "scoreboard.json")
+        try:
+            with open(scoreboard_file, 'w', encoding='utf-8') as f:
+                json.dump(scores, f, indent=2)  # Save with pretty print
+        except IOError as exc:
+            logging.error("Unable to save high scores: %s", exc)
+
+    # Add current score to list, sort, keep top 10, save
+    def add_score(self, player_name: str = "Player") -> list:
+        scores = self.load_high_scores()  # Load existing
+        scores.append({"name": player_name, "score": self.score})  # Add new
+        scores = sorted(scores, key=lambda x: x["score"], reverse=True)[:10]  # Sort and top 10
+        self.save_high_scores(scores)  # Save
+        return scores
+
+    # Reset game to initial state
+    def reset(self) -> None:
+        self.level = 2
+        self._score = 0
+        self.state = GameState.START
+        self.x = 100
+        self.y = 60
+        self.zoom = 20
+        self.figure = None
+        self.columns_hidden = False
+        self.disabled_columns = set()
+        self.field = self.create_empty_field(self.height, self.width)
+
+# ASSET HELPERS
+# =============================================================================
+# Function to load a sound file from a list of names, return None if not found
+def load_sound(names: list):
+    for name in names:  # Try each name
+        path = os.path.join(os.path.dirname(__file__), name)
+        if os.path.exists(path):
+            try:
+                return pygame.mixer.Sound(path)  # Load and return
+            except pygame.error:
+                logging.error("Unable to load sound: %s", path)
+    return None  # None if none work
+
+# Function to generate a simple tone sound using math
+def make_tone_sound(frequency: float, duration: float = 0.15, volume: float = 0.5):
+    sample_rate = 44100  # Samples per second
+    max_amplitude = int(32767 * volume)  # Max volume
+    n_samples = int(sample_rate * duration)  # Total samples
+    sound_buffer = bytearray()  # Buffer for sound data
+    for i in range(n_samples):
+        sample = int(max_amplitude * math.sin(2 * math.pi * frequency * (i / sample_rate)))  # Sine wave
+        sound_buffer += sample.to_bytes(2, byteorder='little', signed=True)  # Add to buffer
+    try:
+        return pygame.mixer.Sound(buffer=bytes(sound_buffer))  # Create sound from buffer
+    except pygame.error:
+        return None
+
+# =============================================================================
+# PYGAME INIT
+# =============================================================================
+# Initialize Pygame modules
+pygame.init()
+try:
+    pygame.mixer.init()  # Try to init audio
+except pygame.error as exc:
+    logging.error("Audio initialization failed: %s", exc)
+
+# Background music setup: try different file names
+music_file = os.path.join(os.path.dirname(__file__), "background_music.mp3")
+for alt_name in ["background_music.wav", "background_music.ogg", "background_music.mp3"]:
+    alt_path = os.path.join(os.path.dirname(__file__), alt_name)
+    if os.path.exists(alt_path):
+        music_file = alt_path  # Use the one that exists
+        break
+if os.path.exists(music_file):
+    try:
+        pygame.mixer.music.load(music_file)  # Load music
+        pygame.mixer.music.set_volume(0.5)  # Set volume
+        pygame.mixer.music.play(-1)  # Play in loop
+    except pygame.error:
+        logging.error("Unable to play background music: %s", music_file)
+else:
+    logging.info("Music file not found. Add background_music.mp3 to the game folder.")
+
+# Sound effects: load or generate
+line_clear_sound = load_sound(["line_clear.wav", "line_clear.ogg", "line_clear.mp3"])
+bomb_sound = load_sound(["bomb_explosion.wav", "bomb_explosion.ogg", "bomb_explosion.mp3"])
+if line_clear_sound is None:
+    line_clear_sound = make_tone_sound(880, 0.08, 0.6)  # Generate tone if no file
+if bomb_sound is None:
+    bomb_sound = make_tone_sound(120, 0.25, 0.8)  # Generate tone
+
+# Display setup
+BLACK = (0, 0, 0)  # Colors for drawing
+WHITE = (255, 255, 255)
+GRAY = (128, 128, 128)
+GOLD = (255, 215, 0)
+DIM = (200, 200, 200)
+size = (400, 500)  # Window size
+screen = pygame.display.set_mode(size)  # Create window
+pygame.display.set_caption("Phantom Tetris by Team LEAP @BSCPE-1A 2026")  # Title
+clock = pygame.time.Clock()  # For frame rate
+fps = 25  # Frames per second
+game = Tetris(20, 10)  # Create game instance
+# Attach sounds to game audio
+game.audio.line_clear_sound = line_clear_sound
+game.audio.bomb_sound = bomb_sound
+counter = 0  # Frame counter for timing
+pressing_down = False  # If down key is held
+player_name = ""  # For entering name
+
+# =============================================================================
+# FONTS — loaded OUTSIDE the main loop
+# =============================================================================
+# Load fonts once for efficiency
+font = pygame.font.SysFont('Calibri', 20, True, False)  # Small font
+font1 = pygame.font.SysFont('Calibri', 65, True, False)  # Large font
+title_font = pygame.font.SysFont('Calibri', 28, True, False)  # Title font
+
+# =============================================================================
+# MAIN LOOP FUNCTIONS
+# =============================================================================
+# Handle user input events
+def handle_events() -> None:
+    global done, pressing_down, player_name
+    for event in pygame.event.get():  # Get all events
+        if event.type == pygame.QUIT:  # Close window
+            done = True
+        if event.type == pygame.KEYDOWN:  # Key pressed
+            if game.state == GameState.START:  # Start screen
+                if event.key in (pygame.K_RETURN, pygame.K_SPACE):
+                    game.state = GameState.PLAYING  # Start game
+                elif event.key == pygame.K_h:
+                    game.state = GameState.HOW_TO_PLAY  # Show help
+                elif event.key == pygame.K_s:
+                    game.state = GameState.SCOREBOARD  # Show scores
+            elif game.state == GameState.HOW_TO_PLAY:  # Help screen
+                if event.key in (pygame.K_ESCAPE, pygame.K_BACKSPACE):
+                    game.state = GameState.START  # Back to start
+            elif game.state == GameState.SCOREBOARD:  # Scoreboard
+                if event.key in (pygame.K_ESCAPE, pygame.K_BACKSPACE):
+                    game.reset()  # Reset and back to start
+                    game.audio.line_clear_sound = line_clear_sound
+                    game.audio.bomb_sound = bomb_sound
+                    game.state = GameState.START
+            elif game.state == GameState.ENTER_NAME:  # Enter name
+                if event.key == pygame.K_RETURN and player_name.strip():
+                    game.add_score(player_name.strip())  # Save score
+                    player_name = ""
+                    game.state = GameState.SCOREBOARD  # Show scores
+                elif event.key == pygame.K_BACKSPACE:
+                    player_name = player_name[:-1]  # Delete char
+                elif event.key == pygame.K_ESCAPE:
+                    game.add_score("Player")  # Default name
+                    player_name = ""
+                    game.state = GameState.SCOREBOARD
+                elif (
+                    len(player_name) < 15  # Max length
+                    and event.unicode.isprintable()
+                    and event.unicode not in ['\r', '\n', '\t']
+                ):
+                    player_name += event.unicode  # Add char
+            elif game.state == GameState.PLAYING:  # Playing
+                if event.key == pygame.K_UP:
+                    game.rotate()  # Rotate
+                if event.key == pygame.K_DOWN:
+                    pressing_down = True  # Start fast drop
+                if event.key == pygame.K_LEFT:
+                    game.go_side(-1)  # Move left
+                if event.key == pygame.K_RIGHT:
+                    game.go_side(1)  # Move right
+                if event.key == pygame.K_SPACE:
+                    game.go_space()  # Hard drop
+                if event.key == pygame.K_ESCAPE:
+                    game.reset()  # Reset game
+                    game.audio.line_clear_sound = line_clear_sound
+                    game.audio.bomb_sound = bomb_sound
+            elif game.state == GameState.GAMEOVER:  # Game over
+                if event.key == pygame.K_ESCAPE:
+                    game.reset()  # Reset
+                    game.audio.line_clear_sound = line_clear_sound
+                    game.audio.bomb_sound = bomb_sound
+                    player_name = ""
+        if event.type == pygame.KEYUP:  # Key released
+            if event.key == pygame.K_DOWN:
+                pressing_down = False  # Stop fast drop
+
+# Update game logic each frame
+def update_game() -> None:
+    global counter
+    if game.state == GameState.PLAYING and game.figure is None:  # If no piece, spawn one
+        game.new_figure()
+    counter += 1  # Increment counter
+    if counter > 100000:  # Prevent overflow
+        counter = 0
+    fall_speed = 5  # Speed of fall
+    if game.state == GameState.PLAYING and (counter % fall_speed == 0 or pressing_down):  # Time to fall
+        game.go_down()
+
+# Draw the game screen
+def render_game() -> None:
+    screen.fill(BLACK)  # Clear screen
+    # START screen
+    if game.state == GameState.START:
+        screen.blit(title_font.render("Phantom Tetris", True, WHITE), [20, 140])  # Title
+        screen.blit(font.render("Press ENTER or SPACE to start", True, WHITE), [40, 220])  # Instructions
+        screen.blit(font.render("Arrow keys to move, ESC to reset", True, WHITE), [40, 260])
+        screen.blit(font.render("Press H for How to Play", True, WHITE), [40, 290])
+        screen.blit(font.render("Press S for Scoreboard", True, WHITE), [40, 320])
+        screen.blit(font.render("By Team LEAP @BSCPE-1A 2025-2026", True, WHITE), [40, 350])
+        pygame.display.flip()  # Update display
+        return
+    # HOW TO PLAY screen
+    if game.state == GameState.HOW_TO_PLAY:
+        screen.blit(title_font.render("How to Play", True, WHITE), [120, 20])  # Title
+        instructions = [  # List of instructions
+            ("OBJECTIVE:", True),
+            ("Clear rows by filling them completely", False),
+            ("Avoid blocks reaching the red line!", False),
+            ("", False),
+            ("CONTROLS:", True),
+            ("LEFT/RIGHT ARROW - Move piece", False),
+            ("UP ARROW - Rotate piece", False),
+            ("DOWN ARROW - Move piece down faster", False),
+            ("SPACE - Drop piece instantly", False),
+            ("ESC - Reset game", False),
+            ("", False),
+            ("SPECIAL PIECES:", True),
+            ("Yellow Bomb - clears a 3x3 area", False),
+            ("Orange Heavy - no rotation, +5 pts", False),
+            ("Teal Ice - freezes neighboring blocks", False),
+            ("Row 15 (red line) disables outer columns", False),
+            ("", False),
+            ("Press ESC or BACKSPACE to go back", False),
+        ]
+        y_pos = 60  # Starting y position
+        for text, is_header in instructions:
+            if text == "":
+                y_pos += 8  # Space
+                continue
+            color = GOLD if is_header else WHITE  # Header in gold
+            screen.blit(font.render(text, True, color), [20, y_pos])
+            y_pos += 22  # Next line
+        pygame.display.flip()
+        return
+    # SCOREBOARD screen
+    if game.state == GameState.SCOREBOARD:
+        screen.blit(title_font.render("High Scores", True, WHITE), [100, 30])  # Title
+        scores = game.load_high_scores()  # Get scores
+        y_pos = 100
+        if scores:
+            screen.blit(font.render("Rank   Name           Score", True, GOLD), [30, y_pos])  # Header
+            y_pos += 35
+            for rank, entry in enumerate(scores[:10], 1):  # Top 10
+                line = f"{rank:2d}.   {entry['name']:<15} {entry['score']}"  # Format
+                screen.blit(font.render(line, True, WHITE), [30, y_pos])
+                y_pos += 28
+        else:
+            screen.blit(font.render("No scores yet. Play a game!", True, WHITE), [50, 150])  # No scores
+        screen.blit(font.render("Press ESC or BACKSPACE to go back", True, DIM), [20, 460])  # Back
+        pygame.display.flip()
+        return
+    # ENTER NAME screen
+    if game.state == GameState.ENTER_NAME:
+        screen.blit(title_font.render("Enter Your Name", True, WHITE), [80, 30])  # Title
+        screen.blit(font.render(f"Your Score: {game.score}", True, GOLD), [100, 100])  # Score
+        screen.blit(font.render("Enter your name:", True, WHITE), [100, 150])  # Prompt
+        name_display = (player_name + "_") if len(player_name) < 15 else player_name  # Show cursor
+        if not player_name:
+            name_display = "Type your name..."  # Placeholder
+        screen.blit(font.render(name_display, True, GOLD), [100, 180])  # Name
+        for i, line in enumerate([  # Instructions
+            "Type your name (max 15 characters)",
+            "Press ENTER to save score",
+            "Press ESC to use 'Player'",
+            "Press BACKSPACE to delete",
+        ]):
+            screen.blit(font.render(line, True, DIM), [50, 250 + i * 25])
+        pygame.display.flip()
+        return
+    # PLAYING / GAMEOVER board
+    for i in range(game.height):  # Draw grid
+        for j in range(game.width):
+            if j in game.disabled_columns:  # Skip disabled columns
+                continue
+            grid_color = (255, 0, 0) if i == 14 else GRAY  # Red for row 14
+            pygame.draw.rect(screen, grid_color, [game.x + game.zoom * j, game.y + game.zoom * i, game.zoom, game.zoom], 1)  # Grid lines
+            if game.field[i][j] > 0:  # If block
+                pygame.draw.rect(screen, colors[game.field[i][j]], [game.x + game.zoom * j + 1, game.y + game.zoom * i + 1, game.zoom - 2, game.zoom - 1])  # Filled block
+    # Draw current piece
+    if game.figure is not None:
+        for i in range(4):
+            for j in range(4):
+                if i * 4 + j in game.figure.image():
+                    col = j + game.figure.x
+                    if col not in game.disabled_columns:  # Skip if disabled
+                        pygame.draw.rect(screen, colors[game.figure.color], [game.x + game.zoom * col + 1, game.y + game.zoom * (i + game.figure.y) + 1, game.zoom - 2, game.zoom - 2])
+    # HUD
+    screen.blit(font.render("Score: " + str(game.score), True, WHITE), [0, 0])  # Score
+    if game.columns_hidden and game.state == GameState.PLAYING:
+        msg = font.render("Outer columns disabled!", True, (255, 0, 0))  # Warning
+        screen.blit(msg, msg.get_rect(center=(size[0] // 2, game.y - 12)))
+    # GAMEOVER overlay
+    if game.state == GameState.GAMEOVER:
+        screen.blit(font1.render("Game Over", True, (255, 125, 0)), [20, 150])  # Game over text
+        screen.blit(font1.render("Press ESC", True, GOLD), [25, 215])  # Reset
+        screen.blit(font.render(f"Your Score: {game.score}", True, GOLD), [60, 290])  # Final score
+        screen.blit(font.render("Top Scores:", True, WHITE), [60, 320])  # Top scores
+        scores = game.load_high_scores()
+        for rank, entry in enumerate(scores[:3], 1):  # Show top 3
+            screen.blit(font.render(f"{rank}. {entry['name']}: {entry['score']}", True, WHITE), [70, 320 + rank * 25])
+    pygame.display.flip()  # Update display
+
+# =============================================================================
+# MAIN LOOP
+# =============================================================================
+done = False  # Game loop flag
+while not done:  # Main loop
+    handle_events()  # Handle input
+    update_game()  # Update logic
+    render_game()  # Draw screen
+    clock.tick(fps)  # Limit FPS
+pygame.quit()  # Quit Pygame
