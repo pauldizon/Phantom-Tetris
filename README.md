@@ -1,5 +1,4 @@
 # Phantom-Tetris
-Finals
 
 **Game Overview**
 
