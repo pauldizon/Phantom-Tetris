@@ -3,10 +3,23 @@ Finals
 
 **Game Overview**
 
-Welcome to a version of tetris that causes claustrophobia and solves it with bombs. This game is a Finals Project of 1st year Angeles University Foundation Computer Engineering students Gideon Paul M. Dizon and Shaina Lauren A. Sicat for their Object Oriented Programming subject to be submitted to Sir Jeremy A. tecson.
+Welcome to a version of tetris that causes claustrophobia and solves it with bombs. This game is a Finals Project of the 1st years in Angeles University Foundation under the course of Computer Engineering, Gideon Paul M. Dizon and Shaina Lauren A. Sicat for their Object Oriented Programming subject to be submitted to Sir Jeremy A. Tecson.
+
+____________________________________________________________________________________________________________________________________________________________________________________________________________
 
 **How-to-Play**
 
-The mechanics of the game are similar to your usual Tetris with your left,right and down arrow keys serving as the means to rotate and speed the fall down of your pieces. But it adds the addition of a red line that acts as a flag to suddenly hide the outer rows that act as pressure to the player to plan their approach ahead of time. Also to combat this increased difficulty the player will be given a 20% chance to spawn bombs to clear a 3x3 area to alleviate pressure and help clean rows. The percentage of bombs are increased to 45% when the columns are closed. 
++ Left Arrow – Move left
++ Right Arrow – Move right
++ Up Arrow – Rotate piece
++ Down Arrow – Accelerate the drop
+
+To balance the increased difficulty, players have a chance to receive bomb blocks:
+
++ 20% chance during normal gameplay
++ Increased to 45% chance when the columns are closed
+
+Bombs clear a 3×3 area, helping players reduce pressure, create space, and complete rows more effectively.
+___________________________________________________________________________________________________________
 
 **Goodluck and bomb's away player!**
